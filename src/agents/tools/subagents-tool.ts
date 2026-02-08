@@ -8,6 +8,7 @@ import { loadSessionStore, resolveStorePath, updateSessionStore } from "../../co
 import { callGateway } from "../../gateway/call.js";
 import { logVerbose } from "../../globals.js";
 import {
+  getSubagentDepth,
   isSubagentSessionKey,
   parseAgentSessionKey,
   type ParsedAgentSessionKey,
@@ -296,6 +297,22 @@ function resolveRequesterKey(params: {
       callerIsSubagent: false,
     };
   }
+
+  // Check if this sub-agent can spawn children (orchestrator).
+  // If so, it should see its own children, not its parent's children.
+  const callerDepth = getSubagentDepth(callerSessionKey);
+  const maxSpawnDepth = params.cfg.agents?.defaults?.subagents?.maxSpawnDepth ?? 1;
+  if (callerDepth < maxSpawnDepth) {
+    // Orchestrator sub-agent: use its own session key as requester
+    // so it sees children it spawned.
+    return {
+      requesterSessionKey: callerSessionKey,
+      callerSessionKey,
+      callerIsSubagent: true,
+    };
+  }
+
+  // Leaf sub-agent: walk up to its parent so it can see sibling runs.
   const cache = new Map<string, Record<string, SessionEntry>>();
   const callerEntry = resolveSessionEntryForKey({
     cfg: params.cfg,
