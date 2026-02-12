@@ -110,5 +110,13 @@ if [ -d /data/postgres ] && command -v pg_isready >/dev/null 2>&1; then
     pg_ctlcluster 16 main start 2>/dev/null || true
 fi
 
+# Map legacy gateway token env var if needed
+if [ -n "$CLAWDBOT_GATEWAY_TOKEN" ] && [ -z "$OPENCLAW_GATEWAY_TOKEN" ]; then
+    export OPENCLAW_GATEWAY_TOKEN="$CLAWDBOT_GATEWAY_TOKEN"
+    echo "[fly-entrypoint] Mapped CLAWDBOT_GATEWAY_TOKEN to OPENCLAW_GATEWAY_TOKEN"
+fi
+
+unset CLAWDBOT_GATEWAY_TOKEN
+
 # Execute the main command
 exec "$@"
