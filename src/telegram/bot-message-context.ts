@@ -1,4 +1,5 @@
 import type { Bot } from "grammy";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { DmPolicy, TelegramGroupConfig, TelegramTopicConfig } from "../config/types.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
@@ -48,6 +49,7 @@ import {
   buildTelegramGroupPeerId,
   buildTelegramParentPeer,
   buildTypingThreadParams,
+  resolveTelegramMediaPlaceholder,
   expandTextLinks,
   normalizeForwardedContext,
   describeReplyTarget,
@@ -55,6 +57,7 @@ import {
   hasBotMention,
   resolveTelegramThreadSpec,
 } from "./bot/helpers.js";
+import { evaluateTelegramGroupBaseAccess } from "./group-access.js";
 
 export type TelegramMediaRef = {
   path: string;
@@ -191,17 +194,48 @@ export const buildTelegramMessageContext = async ({
     storeAllowFrom,
   });
   const hasGroupAllowOverride = typeof groupAllowOverride !== "undefined";
+  const senderId = msg.from?.id ? String(msg.from.id) : "";
+  const senderUsername = msg.from?.username ?? "";
+  const baseAccess = evaluateTelegramGroupBaseAccess({
+    isGroup,
+    groupConfig,
+    topicConfig,
+    hasGroupAllowOverride,
+    effectiveGroupAllow,
+    senderId,
+    senderUsername,
+    enforceAllowOverride: true,
+    requireSenderForAllowOverride: false,
+  });
+  if (!baseAccess.allowed) {
+    if (baseAccess.reason === "group-disabled") {
+      logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
+      return null;
+    }
+    if (baseAccess.reason === "topic-disabled") {
+      logVerbose(
+        `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
+      );
+      return null;
+    }
+    logVerbose(`Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`);
+    return null;
+  }
 
-  if (isGroup && groupConfig?.enabled === false) {
-    logVerbose(`Blocked telegram group ${chatId} (group disabled)`);
-    return null;
-  }
-  if (isGroup && topicConfig?.enabled === false) {
-    logVerbose(
-      `Blocked telegram topic ${chatId} (${resolvedThreadId ?? "unknown"}) (topic disabled)`,
-    );
-    return null;
-  }
+  // Compute requireMention early for preflight transcription gating
+  const activationOverride = resolveGroupActivation({
+    chatId,
+    messageThreadId: resolvedThreadId,
+    sessionKey: sessionKey,
+    agentId: route.agentId,
+  });
+  const baseRequireMention = resolveGroupRequireMention(chatId);
+  const requireMention = firstDefined(
+    activationOverride,
+    topicConfig?.requireMention,
+    groupConfig?.requireMention,
+    baseRequireMention,
+  );
 
   const sendTyping = async () => {
     await withTelegramApiErrorLogging({
@@ -257,6 +291,7 @@ export const buildTelegramMessageContext = async ({
             const { code, created } = await upsertChannelPairingRequest({
               channel: "telegram",
               id: telegramUserId,
+              accountId: account.accountId,
               meta: {
                 username: from?.username,
                 firstName: from?.first_name,
@@ -303,21 +338,6 @@ export const buildTelegramMessageContext = async ({
   }
 
   const botUsername = primaryCtx.me?.username?.toLowerCase();
-  const senderId = msg.from?.id ? String(msg.from.id) : "";
-  const senderUsername = msg.from?.username ?? "";
-  if (isGroup && hasGroupAllowOverride) {
-    const allowed = isSenderAllowed({
-      allow: effectiveGroupAllow,
-      senderId,
-      senderUsername,
-    });
-    if (!allowed) {
-      logVerbose(
-        `Blocked telegram group sender ${senderId || "unknown"} (group allowFrom override)`,
-      );
-      return null;
-    }
-  }
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const senderAllowedForCommands = isSenderAllowed({
     allow: allowForCommands,
@@ -337,20 +357,7 @@ export const buildTelegramMessageContext = async ({
   const commandAuthorized = commandGate.commandAuthorized;
   const historyKey = isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : undefined;
 
-  let placeholder = "";
-  if (msg.photo) {
-    placeholder = "<media:image>";
-  } else if (msg.video) {
-    placeholder = "<media:video>";
-  } else if (msg.video_note) {
-    placeholder = "<media:video>";
-  } else if (msg.audio || msg.voice) {
-    placeholder = "<media:audio>";
-  } else if (msg.document) {
-    placeholder = "<media:document>";
-  } else if (msg.sticker) {
-    placeholder = "<media:sticker>";
-  }
+  let placeholder = resolveTelegramMediaPlaceholder(msg) ?? "";
 
   // Check if sticker has a cached description - if so, use it instead of sending the image
   const cachedStickerDescription = allMedia[0]?.stickerMetadata?.cachedDescription;
@@ -370,6 +377,7 @@ export const buildTelegramMessageContext = async ({
   const locationText = locationData ? formatLocationText(locationData) : undefined;
   const rawTextSource = msg.text ?? msg.caption ?? "";
   const rawText = expandTextLinks(rawTextSource, msg.entities ?? msg.caption_entities).trim();
+  const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {
     rawBody = placeholder;
@@ -379,13 +387,102 @@ export const buildTelegramMessageContext = async ({
   }
 
   let bodyText = rawBody;
-  if (!bodyText && allMedia.length > 0) {
-    bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+  const hasAudio = allMedia.some((media) => media.contentType?.startsWith("audio/"));
+
+  // Audio transcription: transcribe voice notes before they reach the agent.
+  // In groups: enables mention detection in voice notes.
+  // In DMs: replaces <media:audio> placeholder with transcript text.
+  let preflightTranscript: string | undefined;
+  const needsPreflightTranscription =
+    hasAudio && !hasUserText && (!isGroup || (requireMention && mentionRegexes.length > 0));
+
+  if (needsPreflightTranscription) {
+    try {
+      const { transcribeFirstAudio } = await import("../media-understanding/audio-preflight.js");
+      // Build a minimal context for transcription
+      const tempCtx: MsgContext = {
+        MediaPaths: allMedia.length > 0 ? allMedia.map((m) => m.path) : undefined,
+        MediaTypes:
+          allMedia.length > 0
+            ? (allMedia.map((m) => m.contentType).filter(Boolean) as string[])
+            : undefined,
+      };
+      preflightTranscript = await transcribeFirstAudio({
+        ctx: tempCtx,
+        cfg,
+        agentDir: undefined,
+      });
+    } catch (err) {
+      logVerbose(`telegram: audio preflight transcription failed: ${String(err)}`);
+    }
+
+    // Fallback: if the media pipeline returned nothing, try calling whisper-cli directly.
+    // This handles cases where the pipeline's attachment normalization or model resolution
+    // silently produces no output (e.g. format mismatch, missing config fields).
+    if (!preflightTranscript && allMedia.length > 0) {
+      const audioMedia = allMedia.find((m) => m.contentType?.startsWith("audio/"));
+      if (audioMedia?.path) {
+        try {
+          const { execFile } = await import("node:child_process");
+          const { promisify } = await import("node:util");
+          const { mkdtemp, readFile, rm } = await import("node:fs/promises");
+          const { tmpdir } = await import("node:os");
+          const pathMod = await import("node:path");
+          const execFileAsync = promisify(execFile);
+
+          const audioModels = cfg.tools?.media?.audio?.models;
+          const cliEntry = audioModels?.find(
+            (m: { type?: string; command?: string }) => m.type === "cli" || m.command,
+          );
+          if (cliEntry?.command) {
+            const outputDir = await mkdtemp(pathMod.join(tmpdir(), "openclaw-audio-fallback-"));
+            const outputBase = pathMod.join(outputDir, "out");
+            const resolvedArgs = (cliEntry.args ?? []).map((a: string) =>
+              a.replace("{{MediaPath}}", audioMedia.path).replace("{{OutputBase}}", outputBase),
+            );
+            try {
+              await execFileAsync(cliEntry.command, resolvedArgs, {
+                timeout: 30_000,
+                maxBuffer: 1024 * 1024,
+              });
+              const outputFile = outputBase + ".txt";
+              const text = (await readFile(outputFile, "utf-8")).trim();
+              if (text) {
+                preflightTranscript = text;
+                logVerbose(
+                  `telegram: audio fallback transcription succeeded (${text.length} chars)`,
+                );
+              }
+            } finally {
+              await rm(outputDir, { recursive: true, force: true }).catch(() => {});
+            }
+          }
+        } catch (fallbackErr) {
+          logVerbose(`telegram: audio fallback transcription failed: ${String(fallbackErr)}`);
+        }
+      }
+    }
   }
+
+  // Replace audio placeholder with transcript when preflight succeeds.
+  if (hasAudio && bodyText === "<media:audio>" && preflightTranscript) {
+    bodyText = preflightTranscript;
+  }
+
+  // Build bodyText fallback for messages that still have no text.
+  if (!bodyText && allMedia.length > 0) {
+    if (hasAudio) {
+      bodyText = preflightTranscript || "<media:audio>";
+    } else {
+      bodyText = `<media:image>${allMedia.length > 1 ? ` (${allMedia.length} images)` : ""}`;
+    }
+  }
+
   const hasAnyMention = (msg.entities ?? msg.caption_entities ?? []).some(
     (ent) => ent.type === "mention",
   );
   const explicitlyMentioned = botUsername ? hasBotMention(msg, botUsername) : false;
+
   const computedWasMentioned = matchesMentionWithExplicit({
     text: msg.text ?? msg.caption ?? "",
     mentionRegexes,
@@ -394,6 +491,7 @@ export const buildTelegramMessageContext = async ({
       isExplicitlyMentioned: explicitlyMentioned,
       canResolveExplicit: Boolean(botUsername),
     },
+    transcript: preflightTranscript,
   });
   const wasMentioned = options?.forceWasMentioned === true ? true : computedWasMentioned;
   if (isGroup && commandGate.shouldBlock) {
@@ -405,19 +503,6 @@ export const buildTelegramMessageContext = async ({
     });
     return null;
   }
-  const activationOverride = resolveGroupActivation({
-    chatId,
-    messageThreadId: resolvedThreadId,
-    sessionKey: sessionKey,
-    agentId: route.agentId,
-  });
-  const baseRequireMention = resolveGroupRequireMention(chatId);
-  const requireMention = firstDefined(
-    activationOverride,
-    topicConfig?.requireMention,
-    groupConfig?.requireMention,
-    baseRequireMention,
-  );
   // Reply-chain detection: replying to a bot message acts like an implicit mention.
   const botId = primaryCtx.me?.id;
   const replyFromId = msg.reply_to_message?.from?.id;
@@ -456,7 +541,10 @@ export const buildTelegramMessageContext = async ({
   }
 
   // ACK reactions
-  const ackReaction = resolveAckReaction(cfg, route.agentId);
+  const ackReaction = resolveAckReaction(cfg, route.agentId, {
+    channel: "telegram",
+    accountId: account.accountId,
+  });
   const removeAckAfterReply = cfg.messages?.removeAckAfterReply ?? false;
   const shouldAckReaction = () =>
     Boolean(

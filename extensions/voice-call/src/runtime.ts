@@ -55,8 +55,7 @@ function resolveProvider(config: VoiceCallConfig): VoiceCallProvider {
           publicKey: config.telnyx?.publicKey,
         },
         {
-          allowUnsignedWebhooks:
-            config.inboundPolicy === "open" || config.inboundPolicy === "disabled",
+          skipVerification: config.skipSignatureVerification,
         },
       );
     case "twilio":
@@ -111,6 +110,12 @@ export async function createVoiceCallRuntime(params: {
 
   if (!config.enabled) {
     throw new Error("Voice call disabled. Enable the plugin entry in config.");
+  }
+
+  if (config.skipSignatureVerification) {
+    log.warn(
+      "[voice-call] SECURITY WARNING: skipSignatureVerification=true disables webhook signature verification (development only). Do not use in production.",
+    );
   }
 
   const validation = validateProviderConfig(config);
@@ -181,6 +186,35 @@ export async function createVoiceCallRuntime(params: {
     if (mediaHandler) {
       twilioProvider.setMediaStreamHandler(mediaHandler);
       log.info("[voice-call] Media stream handler wired to provider");
+    }
+
+    // Pre-cache inbound greeting TTS for instant playback on connect
+    if (config.inboundGreeting && ttsRuntime?.textToSpeechTelephony) {
+      try {
+        const greetingTts = createTelephonyTtsProvider({
+          coreConfig,
+          ttsOverride: config.tts,
+          runtime: ttsRuntime,
+        });
+        greetingTts
+          .synthesizeForTelephony(config.inboundGreeting)
+          .then((audio) => {
+            twilioProvider.setCachedGreetingAudio(audio);
+          })
+          .catch((err) => {
+            log.warn(
+              `[voice-call] Failed to pre-cache greeting: ${
+                err instanceof Error ? err.message : String(err)
+              }`,
+            );
+          });
+      } catch (err) {
+        log.warn(
+          `[voice-call] Failed to init greeting TTS: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
     }
   }
 

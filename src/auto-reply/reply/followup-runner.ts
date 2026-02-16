@@ -18,12 +18,12 @@ import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   applyReplyThreading,
   filterMessagingToolDuplicates,
+  filterMessagingToolMediaDuplicates,
   shouldSuppressMessagingToolReplies,
 } from "./reply-payloads.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
-import { incrementCompactionCount } from "./session-updates.js";
-import { persistSessionUsageUpdate } from "./session-usage.js";
+import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 
 export function createFollowupRunner(params: {
@@ -167,6 +167,7 @@ export function createFollowupRunner(params: {
               thinkLevel: queued.run.thinkLevel,
               verboseLevel: queued.run.verboseLevel,
               reasoningLevel: queued.run.reasoningLevel,
+              suppressToolErrorWarnings: opts?.suppressToolErrorWarnings,
               execOverrides: queued.run.execOverrides,
               bashElevated: queued.run.bashElevated,
               timeoutMs: queued.run.timeoutMs,
@@ -177,8 +178,7 @@ export function createFollowupRunner(params: {
                   return;
                 }
                 const phase = typeof evt.data.phase === "string" ? evt.data.phase : "";
-                const willRetry = Boolean(evt.data.willRetry);
-                if (phase === "end" && !willRetry) {
+                if (phase === "end") {
                   autoCompactionCompleted = true;
                 }
               },
@@ -194,19 +194,22 @@ export function createFollowupRunner(params: {
         return;
       }
 
-      if (storePath && sessionKey) {
-        const usage = runResult.meta.agentMeta?.usage;
-        const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
-        const contextTokensUsed =
-          agentCfgContextTokens ??
-          lookupContextTokens(modelUsed) ??
-          sessionEntry?.contextTokens ??
-          DEFAULT_CONTEXT_TOKENS;
+      const usage = runResult.meta.agentMeta?.usage;
+      const promptTokens = runResult.meta.agentMeta?.promptTokens;
+      const modelUsed = runResult.meta.agentMeta?.model ?? fallbackModel ?? defaultModel;
+      const contextTokensUsed =
+        agentCfgContextTokens ??
+        lookupContextTokens(modelUsed) ??
+        sessionEntry?.contextTokens ??
+        DEFAULT_CONTEXT_TOKENS;
 
-        await persistSessionUsageUpdate({
+      if (storePath && sessionKey) {
+        await persistRunSessionUsage({
           storePath,
           sessionKey,
           usage,
+          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          promptTokens,
           modelUsed,
           providerUsed: fallbackProvider,
           contextTokensUsed,
@@ -250,24 +253,30 @@ export function createFollowupRunner(params: {
         payloads: replyTaggedPayloads,
         sentTexts: runResult.messagingToolSentTexts ?? [],
       });
+      const mediaFilteredPayloads = filterMessagingToolMediaDuplicates({
+        payloads: dedupedPayloads,
+        sentMediaUrls: runResult.messagingToolSentMediaUrls ?? [],
+      });
       const suppressMessagingToolReplies = shouldSuppressMessagingToolReplies({
         messageProvider: queued.run.messageProvider,
         messagingToolSentTargets: runResult.messagingToolSentTargets,
         originatingTo: queued.originatingTo,
         accountId: queued.run.agentAccountId,
       });
-      const finalPayloads = suppressMessagingToolReplies ? [] : dedupedPayloads;
+      const finalPayloads = suppressMessagingToolReplies ? [] : mediaFilteredPayloads;
 
       if (finalPayloads.length === 0) {
         return;
       }
 
       if (autoCompactionCompleted) {
-        const count = await incrementCompactionCount({
+        const count = await incrementRunCompactionCount({
           sessionEntry,
           sessionStore,
           sessionKey,
           storePath,
+          lastCallUsage: runResult.meta.agentMeta?.lastCallUsage,
+          contextTokensUsed,
         });
         if (queued.run.verboseLevel && queued.run.verboseLevel !== "off") {
           const suffix = typeof count === "number" ? ` (count ${count})` : "";

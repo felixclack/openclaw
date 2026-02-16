@@ -112,9 +112,9 @@ Full security guide: [Security](https://docs.openclaw.ai/gateway/security)
 
 Default behavior on Telegram/WhatsApp/Signal/iMessage/Microsoft Teams/Discord/Google Chat/Slack:
 
-- **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dm.policy="pairing"` / `channels.slack.dm.policy="pairing"`): unknown senders receive a short pairing code and the bot does not process their message.
+- **DM pairing** (`dmPolicy="pairing"` / `channels.discord.dmPolicy="pairing"` / `channels.slack.dmPolicy="pairing"`; legacy: `channels.discord.dm.policy`, `channels.slack.dm.policy`): unknown senders receive a short pairing code and the bot does not process their message.
 - Approve with: `openclaw pairing approve <channel> <code>` (then the sender is added to a local allowlist store).
-- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the channel allowlist (`allowFrom` / `channels.discord.dm.allowFrom` / `channels.slack.dm.allowFrom`).
+- Public inbound DMs require an explicit opt-in: set `dmPolicy="open"` and include `"*"` in the channel allowlist (`allowFrom` / `channels.discord.allowFrom` / `channels.slack.allowFrom`; legacy: `channels.discord.dm.allowFrom`, `channels.slack.dm.allowFrom`).
 
 Run `openclaw doctor` to surface risky/misconfigured DM policies.
 
@@ -262,6 +262,19 @@ ClawHub is a minimal skill registry. With ClawHub enabled, the agent can search 
 
 [ClawHub](https://clawhub.com)
 
+### Example skill: video-quote-finder
+
+Use `skills/video-quote-finder` to locate where a quote appears in a YouTube video and return timestamp links.
+
+Original prompt:
+
+> "OK I want to make a PR with this skill back to openclaw... make a new one that
+> will search for a point on the video and give me the timestamp. For example I
+> want to find the timestamp in this video where Peter says 'I think vibe coding
+> is a slur'"
+>
+> Video: [https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV](https://youtu.be/YFjfBk8HI5o?si=DTT2nVt0HQ4dSIoV)
+
 ## Chat commands
 
 Send these in WhatsApp/Telegram/Slack/Google Chat/Microsoft Teams/WebChat (group commands are owner-only):
@@ -303,6 +316,7 @@ Runbook: [iOS connect](https://docs.openclaw.ai/platforms/ios).
 - Pairs via the same Bridge + pairing flow as iOS.
 - Exposes Canvas, Camera, and Screen capture commands.
 - Runbook: [Android connect](https://docs.openclaw.ai/platforms/android).
+- Install: [OpenClaw for Android](https://github.com/irtiq7/OpenClaw-Android).
 
 ## Agent workspace + skills
 
@@ -360,7 +374,7 @@ Details: [Security guide](https://docs.openclaw.ai/gateway/security) · [Docker 
 ### [Discord](https://docs.openclaw.ai/channels/discord)
 
 - Set `DISCORD_BOT_TOKEN` or `channels.discord.token` (env wins).
-- Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `channels.discord.dm.allowFrom`, `channels.discord.guilds`, or `channels.discord.mediaMaxMb` as needed.
+- Optional: set `commands.native`, `commands.text`, or `commands.useAccessGroups`, plus `channels.discord.allowFrom`, `channels.discord.guilds`, or `channels.discord.mediaMaxMb` as needed.
 
 ```json5
 {

@@ -28,7 +28,7 @@ import {
   resolveUsageProviderId,
 } from "../../infra/provider-usage.js";
 import { normalizeGroupActivation } from "../group-activation.js";
-import { buildStatusMessage } from "../status.js";
+import { buildStatusMessage, getTranscriptInfo } from "../status.js";
 import { getFollowupQueueDepth, resolveQueueSettings } from "./queue.js";
 import { resolveSubagentLabel } from "./subagents-utils.js";
 
@@ -106,6 +106,7 @@ export async function buildStatusReply(params: {
   sessionEntry?: SessionEntry;
   sessionKey: string;
   sessionScope?: SessionScope;
+  storePath?: string;
   provider: string;
   model: string;
   contextTokens: number;
@@ -124,6 +125,7 @@ export async function buildStatusReply(params: {
     sessionEntry,
     sessionKey,
     sessionScope,
+    storePath,
     provider,
     model,
     contextTokens,
@@ -222,9 +224,11 @@ export async function buildStatusReply(params: {
       verboseDefault: agentDefaults.verboseDefault,
       elevatedDefault: agentDefaults.elevatedDefault,
     },
+    agentId: statusAgentId,
     sessionEntry,
     sessionKey,
     sessionScope,
+    sessionStorePath: storePath,
     groupActivation,
     resolvedThink: resolvedThinkLevel ?? (await resolveDefaultThinkingLevel()),
     resolvedVerbose: resolvedVerboseLevel,
@@ -243,6 +247,13 @@ export async function buildStatusReply(params: {
     subagentsLine,
     mediaDecisions: params.mediaDecisions,
     includeTranscriptUsage: false,
+    transcriptInfo: getTranscriptInfo({
+      sessionId: sessionEntry?.sessionId,
+      sessionEntry,
+      agentId: statusAgentId,
+      sessionKey,
+      storePath,
+    }),
   });
 
   return { text: statusText };

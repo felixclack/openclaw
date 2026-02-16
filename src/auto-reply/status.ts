@@ -13,12 +13,14 @@ import { derivePromptTokens, normalizeUsage, type UsageLike } from "../agents/us
 import {
   resolveMainSessionKey,
   resolveSessionFilePath,
+  resolveSessionFilePathOptions,
   type SessionEntry,
   type SessionScope,
 } from "../config/sessions.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { listPluginCommands } from "../plugins/commands.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   getTtsMaxLength,
   getTtsProvider,
@@ -53,12 +55,23 @@ type QueueStatus = {
   showDetails?: boolean;
 };
 
+export type TranscriptInfo = {
+  /** File size in bytes. */
+  sizeBytes: number;
+  /** Number of non-empty lines (messages) in the transcript. */
+  messageCount: number;
+  /** Absolute path to the transcript file. */
+  filePath: string;
+};
+
 type StatusArgs = {
   config?: OpenClawConfig;
   agent: AgentConfig;
+  agentId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
   sessionScope?: SessionScope;
+  sessionStorePath?: string;
   groupActivation?: "mention" | "always";
   resolvedThink?: ThinkLevel;
   resolvedVerbose?: VerboseLevel;
@@ -71,6 +84,7 @@ type StatusArgs = {
   mediaDecisions?: MediaUnderstandingDecision[];
   subagentsLine?: string;
   includeTranscriptUsage?: boolean;
+  transcriptInfo?: TranscriptInfo;
   now?: number;
 };
 
@@ -165,6 +179,9 @@ const formatQueueDetails = (queue?: QueueStatus) => {
 const readUsageFromSessionLog = (
   sessionId?: string,
   sessionEntry?: SessionEntry,
+  agentId?: string,
+  sessionKey?: string,
+  storePath?: string,
 ):
   | {
       input: number;
@@ -178,7 +195,18 @@ const readUsageFromSessionLog = (
   if (!sessionId) {
     return undefined;
   }
-  const logPath = resolveSessionFilePath(sessionId, sessionEntry);
+  let logPath: string;
+  try {
+    const resolvedAgentId =
+      agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+    logPath = resolveSessionFilePath(
+      sessionId,
+      sessionEntry,
+      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath }),
+    );
+  } catch {
+    return undefined;
+  }
   if (!fs.existsSync(logPath)) {
     return undefined;
   }
@@ -306,6 +334,74 @@ const formatVoiceModeLine = (
   return `🔊 Voice: ${autoMode} · provider=${provider} · limit=${maxLength} · summary=${summarize}`;
 };
 
+/**
+ * Read transcript file metadata (size + line count) for a session.
+ * Returns `undefined` when the file does not exist or cannot be read.
+ */
+export function getTranscriptInfo(params: {
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  agentId?: string;
+  sessionKey?: string;
+  storePath?: string;
+}): TranscriptInfo | undefined {
+  if (!params.sessionId) {
+    return undefined;
+  }
+  let logPath: string;
+  try {
+    const resolvedAgentId =
+      params.agentId ??
+      (params.sessionKey ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+    logPath = resolveSessionFilePath(
+      params.sessionId,
+      params.sessionEntry,
+      resolveSessionFilePathOptions({ agentId: resolvedAgentId, storePath: params.storePath }),
+    );
+  } catch {
+    return undefined;
+  }
+  try {
+    const stat = fs.statSync(logPath);
+    if (!stat.isFile()) {
+      return undefined;
+    }
+    // Count non-empty lines for message count.
+    const content = fs.readFileSync(logPath, "utf-8");
+    let messageCount = 0;
+    for (const line of content.split("\n")) {
+      if (line.trim()) {
+        messageCount += 1;
+      }
+    }
+    return { sizeBytes: stat.size, messageCount, filePath: logPath };
+  } catch {
+    return undefined;
+  }
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  if (bytes < 1024 * 1024) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Size threshold (bytes) above which a warning emoji is shown. Default: 1 MB. */
+const TRANSCRIPT_SIZE_WARNING_BYTES = 1024 * 1024;
+
+function formatTranscriptLine(info: TranscriptInfo | undefined): string | null {
+  if (!info) {
+    return null;
+  }
+  const sizeLabel = formatFileSize(info.sizeBytes);
+  const warning = info.sizeBytes >= TRANSCRIPT_SIZE_WARNING_BYTES ? " ⚠️" : "";
+  return `📄 Transcript: ${sizeLabel}, ${info.messageCount} message${info.messageCount === 1 ? "" : "s"}${warning}`;
+}
+
 export function buildStatusMessage(args: StatusArgs): string {
   const now = args.now ?? Date.now();
   const entry = args.sessionEntry;
@@ -333,7 +429,13 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(entry?.sessionId, entry);
+    const logUsage = readUsageFromSessionLog(
+      entry?.sessionId,
+      entry,
+      args.agentId,
+      args.sessionKey,
+      args.sessionStorePath,
+    );
     if (logUsage) {
       const candidate = logUsage.promptTokens || logUsage.total;
       if (!totalTokens || totalTokens === 0 || candidate > totalTokens) {
@@ -448,6 +550,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     usagePair && costLine ? `${usagePair} · ${costLine}` : (usagePair ?? costLine);
   const mediaLine = formatMediaUnderstandingLine(args.mediaDecisions);
   const voiceLine = formatVoiceModeLine(args.config, args.sessionEntry);
+  const transcriptLine = formatTranscriptLine(args.transcriptInfo);
 
   return [
     versionLine,
@@ -455,6 +558,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     modelLine,
     usageCostLine,
     `📚 ${contextLine}`,
+    transcriptLine,
     mediaLine,
     args.usageLine,
     `🧵 ${sessionLine}`,

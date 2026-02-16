@@ -8,7 +8,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import type { NodeManagerChoice, OnboardMode, ResetScope } from "./onboard-types.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
 import { CONFIG_PATH } from "../config/config.js";
-import { resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
+import { resolveMainSessionKey, resolveSessionTranscriptsDirForAgent } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
 import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { pickPrimaryLanIPv4, isValidIPv4 } from "../gateway/net.js";
@@ -73,7 +73,27 @@ export function normalizeGatewayTokenInput(value: unknown): string {
   if (typeof value !== "string") {
     return "";
   }
-  return value.trim();
+  const trimmed = value.trim();
+  // Reject the literal string "undefined" — a common bug when JS undefined
+  // gets coerced to a string via template literals or String(undefined).
+  if (trimmed === "undefined" || trimmed === "null") {
+    return "";
+  }
+  return trimmed;
+}
+
+export function validateGatewayPasswordInput(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return "Required";
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "Required";
+  }
+  if (trimmed === "undefined" || trimmed === "null") {
+    return 'Cannot be the literal string "undefined" or "null"';
+  }
+  return undefined;
 }
 
 export function printWizardHeader(runtime: RuntimeEnv) {
@@ -434,12 +454,17 @@ function summarizeError(err: unknown): string {
 
 export const DEFAULT_WORKSPACE = DEFAULT_AGENT_WORKSPACE_DIR;
 
-export function resolveControlUiLinks(params: {
+type ControlUiLinksParams = {
   port: number;
   bind?: "auto" | "lan" | "loopback" | "custom" | "tailnet";
   customBindHost?: string;
   basePath?: string;
-}): { httpUrl: string; wsUrl: string } {
+};
+
+export function resolveControlUiLinks(params: ControlUiLinksParams): {
+  httpUrl: string;
+  wsUrl: string;
+} {
   const port = params.port;
   const bind = params.bind ?? "loopback";
   const customBindHost = params.customBindHost?.trim();
@@ -463,4 +488,40 @@ export function resolveControlUiLinks(params: {
     httpUrl: `http://${host}:${port}${uiPath}`,
     wsUrl: `ws://${host}:${port}${wsPath}`,
   };
+}
+
+export function resolveLocalBrowserControlUiLinks(params: ControlUiLinksParams): {
+  httpUrl: string;
+  wsUrl: string;
+} {
+  const bind = params.bind === "lan" ? "loopback" : params.bind;
+  return resolveControlUiLinks({
+    ...params,
+    bind,
+  });
+}
+
+export function resolveCanonicalMainSessionKey(cfg: OpenClawConfig): string {
+  return resolveMainSessionKey(cfg);
+}
+
+export function buildWebchatUrl(params: {
+  httpUrl: string;
+  sessionKey: string;
+  token?: string;
+}): string {
+  const base = new URL(params.httpUrl);
+  if (!base.pathname.endsWith("/")) {
+    base.pathname = `${base.pathname}/`;
+  }
+
+  const chatUrl = new URL("chat", base);
+  chatUrl.searchParams.set("session", params.sessionKey.trim());
+
+  const token = params.token?.trim();
+  if (token) {
+    chatUrl.hash = `token=${encodeURIComponent(token)}`;
+  }
+
+  return chatUrl.toString();
 }
