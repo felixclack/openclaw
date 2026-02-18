@@ -94,6 +94,7 @@ jobs:
           [ -n "${TELEGRAM_BOT_TOKEN}" ] && SECRETS+=("TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}")
           [ -n "${DISCORD_BOT_TOKEN}" ]  && SECRETS+=("DISCORD_BOT_TOKEN=${DISCORD_BOT_TOKEN}")
           [ -n "${DISCORD_GUILD_ID}" ]   && SECRETS+=("DISCORD_GUILD_ID=${DISCORD_GUILD_ID}")
+          [ -n "${XAI_API_KEY}" ]        && SECRETS+=("XAI_API_KEY=${XAI_API_KEY}")
 
           # Sync-runtime-config env overrides
           [ -n "${OPENCLAW_THINKING_DEFAULT}" ]       && SECRETS+=("OPENCLAW_THINKING_DEFAULT=${OPENCLAW_THINKING_DEFAULT}")
@@ -121,6 +122,7 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
           DISCORD_GUILD_ID: ${{ secrets.DISCORD_GUILD_ID }}
+          XAI_API_KEY: ${{ secrets.XAI_API_KEY }}
           OPENCLAW_THINKING_DEFAULT: ${{ secrets.OPENCLAW_THINKING_DEFAULT }}
           OPENCLAW_MAX_CONCURRENT: ${{ secrets.OPENCLAW_MAX_CONCURRENT }}
           OPENCLAW_CONTEXT_PRUNING_MODE: ${{ secrets.OPENCLAW_CONTEXT_PRUNING_MODE }}
