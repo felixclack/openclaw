@@ -44,9 +44,15 @@ RUN pnpm install --filter @openclaw/memory-lancedb --prod --no-frozen-lockfile |
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
+# Save build output before pruning — pnpm prune may remove workspace dirs.
+RUN cp -r dist /tmp/dist-save && cp -r ui/dist /tmp/ui-dist-save
+
 # Strip devDependencies — native modules in `dependencies` survive this step.
 # Both stages use bookworm so compiled .node binaries remain compatible.
 RUN CI=true pnpm prune --prod
+
+# Restore build output after prune.
+RUN cp -r /tmp/dist-save dist && mkdir -p ui && cp -r /tmp/ui-dist-save ui/dist
 
 
 ################################################################################
