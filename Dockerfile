@@ -46,7 +46,7 @@ RUN pnpm ui:build
 
 # Strip devDependencies — native modules in `dependencies` survive this step.
 # Both stages use bookworm so compiled .node binaries remain compatible.
-RUN pnpm prune --prod
+RUN CI=true pnpm prune --prod
 
 
 ################################################################################
