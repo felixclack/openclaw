@@ -112,9 +112,11 @@ try {
     console.log(`[sync-config] Set agents.defaults.workspace=${desiredWorkspace}`);
   }
 
-  // --- Auth profiles from API keys ---
-  const auth = ensureObject(config, "auth");
-  const profiles = ensureObject(auth, "profiles");
+  // --- Detect available providers from env ---
+  // Only used for model selection below. Auth profile resolution is handled by
+  // the gateway's auth store (auth-profiles.json) which supports both OAuth and
+  // API-key profiles. Writing config-level auth.profiles here would override
+  // auto-discovery of store profiles (e.g. OAuth tokens) and cause auth failures.
   const availableProviders = [];
   const seenEnvVars = new Set();
 
@@ -124,12 +126,6 @@ try {
     if (seenEnvVars.has(pc.envVar)) continue;
     seenEnvVars.add(pc.envVar);
     availableProviders.push(pc.provider);
-
-    const existing = profiles[pc.profileKey];
-    if (!existing || existing.mode !== "token" || existing.provider !== pc.provider) {
-      profiles[pc.profileKey] = { mode: "token", provider: pc.provider };
-      console.log(`[sync-config] Set auth.profiles.${pc.profileKey}`);
-    }
   }
 
   // --- Model selection ---
