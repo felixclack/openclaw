@@ -45,14 +45,14 @@ ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
 # Save build output before pruning — pnpm prune may remove workspace dirs.
-RUN cp -r dist /tmp/dist-save && cp -r ui/dist /tmp/ui-dist-save
+RUN cp -r dist /tmp/dist-save
 
 # Strip devDependencies — native modules in `dependencies` survive this step.
 # Both stages use bookworm so compiled .node binaries remain compatible.
 RUN CI=true pnpm prune --prod
 
 # Restore build output after prune.
-RUN cp -r /tmp/dist-save dist && mkdir -p ui && cp -r /tmp/ui-dist-save ui/dist
+RUN cp -r /tmp/dist-save dist
 
 
 ################################################################################
@@ -110,7 +110,6 @@ WORKDIR /app
 
 # Copy built artifacts and production node_modules from builder
 COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/ui/dist ./ui/dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/skills ./skills
@@ -120,7 +119,6 @@ COPY --from=builder /app/package.json ./package.json
 COPY --from=builder /app/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=builder /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 COPY --from=builder /app/.npmrc ./.npmrc
-COPY --from=builder /app/ui/package.json ./ui/package.json
 
 # Optionally install Chromium and Xvfb for browser automation.
 # Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
