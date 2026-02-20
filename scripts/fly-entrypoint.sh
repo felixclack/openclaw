@@ -96,6 +96,11 @@ if [ -n "$TAILSCALE_AUTHKEY" ]; then
     else
         echo "[fly-entrypoint] Tailscale connection pending..."
     fi
+
+    # Serve gateway over HTTPS via Tailscale (auto-provisions TLS cert).
+    # Accessible at https://clawdbot-fly.<tailnet>.ts.net
+    tailscale serve --bg --https 443 http://localhost:3000 2>/dev/null || \
+        echo "[fly-entrypoint] Warning: tailscale serve failed (non-fatal)"
 fi
 
 # Sync runtime config from env vars (idempotent, non-fatal)
