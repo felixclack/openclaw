@@ -33,13 +33,6 @@ function ensureObject(target, key) {
   return target[key];
 }
 
-function ensureArray(target, key) {
-  if (!Array.isArray(target[key])) {
-    target[key] = [];
-  }
-  return target[key];
-}
-
 function providerFromModel(model) {
   const m = trim(model);
   return m.includes("/") ? m.slice(0, m.indexOf("/")) : "";
@@ -48,9 +41,13 @@ function providerFromModel(model) {
 function toUniqueStrings(values) {
   const seen = new Set();
   return values.filter((v) => {
-    if (typeof v !== "string") return false;
+    if (typeof v !== "string") {
+      return false;
+    }
     const n = trim(v);
-    if (!n || seen.has(n)) return false;
+    if (!n || seen.has(n)) {
+      return false;
+    }
     seen.add(n);
     return true;
   });
@@ -69,8 +66,8 @@ const PROVIDERS = [
     provider: "openai-codex",
     envVar: "OPENAI_API_KEY",
     profileKey: "openai-codex:default",
-    primaryModel: "openai-codex/gpt-5.3-codex",
-    fallbackModels: ["openai-codex/gpt-5.2-codex"],
+    primaryModel: "openai-codex/gpt-5.4",
+    fallbackModels: ["openai-codex/gpt-5.3-codex", "openai-codex/gpt-5.2-codex"],
   },
   {
     provider: "openai",
@@ -121,14 +118,27 @@ try {
   const seenEnvVars = new Set();
 
   for (const pc of PROVIDERS) {
-    if (!trim(process.env[pc.envVar])) continue;
+    if (!trim(process.env[pc.envVar])) {
+      continue;
+    }
     // Avoid double-counting providers that share an env var (openai + openai-codex).
-    if (seenEnvVars.has(pc.envVar)) continue;
+    if (seenEnvVars.has(pc.envVar)) {
+      continue;
+    }
     seenEnvVars.add(pc.envVar);
     availableProviders.push(pc.provider);
   }
 
   // --- Model selection ---
+  const configuredPrimaryModel = trim(process.env.OPENCLAW_MODEL_PRIMARY);
+  if (configuredPrimaryModel) {
+    const model = ensureObject(defaults, "model");
+    if (model.primary !== configuredPrimaryModel) {
+      model.primary = configuredPrimaryModel;
+      console.log(`[sync-config] Set agents.defaults.model.primary=${configuredPrimaryModel}`);
+    }
+  }
+
   if (availableProviders.length > 0) {
     const model = ensureObject(defaults, "model");
     const currentPrimary = trim(model.primary);
