@@ -91,4 +91,28 @@ describe("sync-runtime-config", () => {
     expect(cfg.agents?.defaults?.model?.primary).toBe("openai-codex/gpt-5.4");
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
   });
+
+  it("sets gateway.controlUi.allowedOrigins from deployment env", () => {
+    const stateDir = createStateDir();
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n");
+
+    runSyncRuntimeConfig({
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_FILE: configPath,
+      OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS:
+        '["https://clawdbot-fly.tail8ee38.ts.net","https://clawdbot-fly.tail8ee38.ts.net"]',
+    });
+
+    const cfg = readConfig(configPath) as {
+      gateway?: {
+        controlUi?: {
+          allowedOrigins?: string[];
+        };
+      };
+    };
+    expect(cfg.gateway?.controlUi?.allowedOrigins).toEqual([
+      "https://clawdbot-fly.tail8ee38.ts.net",
+    ]);
+  });
 });
