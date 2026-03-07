@@ -53,6 +53,22 @@ function toUniqueStrings(values) {
   });
 }
 
+function parseStringListEnv(rawValue) {
+  const value = trim(rawValue);
+  if (!value) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return toUniqueStrings(parsed);
+    }
+  } catch {
+    // Fall back to a comma-separated list for operator convenience.
+  }
+  return toUniqueStrings(value.split(","));
+}
+
 // Provider priority order — first available becomes primary.
 const PROVIDERS = [
   {
@@ -233,6 +249,23 @@ try {
   }
 
   // --- Gateway ---
+  const controlUiAllowedOrigins = parseStringListEnv(
+    process.env.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS,
+  );
+  if (controlUiAllowedOrigins.length > 0) {
+    const gateway = ensureObject(config, "gateway");
+    const controlUi = ensureObject(gateway, "controlUi");
+    const existingAllowedOrigins = Array.isArray(controlUi.allowedOrigins)
+      ? toUniqueStrings(controlUi.allowedOrigins)
+      : [];
+    if (JSON.stringify(existingAllowedOrigins) !== JSON.stringify(controlUiAllowedOrigins)) {
+      controlUi.allowedOrigins = controlUiAllowedOrigins;
+      console.log(
+        `[sync-config] Set gateway.controlUi.allowedOrigins=${JSON.stringify(controlUiAllowedOrigins)}`,
+      );
+    }
+  }
+
   const gatewayToken = trim(process.env.OPENCLAW_GATEWAY_TOKEN);
   if (gatewayToken) {
     const gateway = ensureObject(config, "gateway");
