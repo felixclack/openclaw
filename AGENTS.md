@@ -63,7 +63,8 @@
 - Pre-commit hooks: `prek install`. The hook runs the repo verification flow, including `pnpm check`.
 - `FAST_COMMIT=1` skips the repo-wide `pnpm format` and `pnpm check` inside the pre-commit hook only. Use it when you intentionally want a faster commit path and are running equivalent targeted verification manually. It does not change CI and does not change what `pnpm check` itself does.
 - Also supported: `bun install` (keep `pnpm-lock.yaml` + Bun patching in sync when touching deps/patches).
-- Prefer Bun for TypeScript execution (scripts, dev, tests): `bun <file.ts>` / `bunx <tool>`.
+- Prefer Bun for TypeScript execution in one-off scripts and dev helpers: `bun <file.ts>` / `bunx <tool>`.
+- For this repo's test suites, use the package scripts or explicit Vitest commands (`pnpm test`, `pnpm test:coverage`, `vitest run ...`); do not use `bun test`.
 - Run CLI in dev: `pnpm openclaw ...` (bun) or `pnpm dev`.
 - Node remains supported for running built output (`dist/*`) and production installs.
 - Mac packaging (dev): `scripts/package-mac-app.sh` defaults to current arch.
