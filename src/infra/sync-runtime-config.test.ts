@@ -24,6 +24,12 @@ function readConfig(configPath: string) {
           fallbacks?: string[];
         };
         thinkingDefault?: string;
+        subagents?: {
+          model?: {
+            primary?: string;
+          };
+          thinking?: string;
+        };
       };
     };
   };
@@ -59,7 +65,7 @@ describe("sync-runtime-config", () => {
     expect(cfg.agents?.defaults?.model?.primary).toBe("openai-codex/gpt-5.4");
   });
 
-  it("lets deployment env override model.primary and thinkingDefault", () => {
+  it("lets deployment env override model.primary and thinking defaults for main + subagents", () => {
     const stateDir = createStateDir();
     const configPath = path.join(stateDir, "openclaw.json");
     fs.writeFileSync(
@@ -90,6 +96,64 @@ describe("sync-runtime-config", () => {
     const cfg = readConfig(configPath);
     expect(cfg.agents?.defaults?.model?.primary).toBe("openai-codex/gpt-5.4");
     expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
+    expect(cfg.agents?.defaults?.subagents?.model?.primary).toBe("openai-codex/gpt-5.4");
+    expect(cfg.agents?.defaults?.subagents?.thinking).toBe("xhigh");
+  });
+
+  it("preserves explicit subagent defaults unless deployment env overrides them", () => {
+    const stateDir = createStateDir();
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(
+      configPath,
+      `${JSON.stringify(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "openai-codex/gpt-5.4" },
+              subagents: {
+                model: { primary: "anthropic/claude-sonnet-4-5" },
+                thinking: "high",
+              },
+            },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    runSyncRuntimeConfig({
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_FILE: configPath,
+      OPENAI_API_KEY: "test-openai-key",
+      OPENCLAW_THINKING_DEFAULT: "xhigh",
+    });
+
+    const cfg = readConfig(configPath);
+    expect(cfg.agents?.defaults?.subagents?.model?.primary).toBe("anthropic/claude-sonnet-4-5");
+    expect(cfg.agents?.defaults?.subagents?.thinking).toBe("high");
+  });
+
+  it("lets deployment env override subagent-specific model + thinking", () => {
+    const stateDir = createStateDir();
+    const configPath = path.join(stateDir, "openclaw.json");
+    fs.writeFileSync(configPath, "{}\n");
+
+    runSyncRuntimeConfig({
+      OPENCLAW_STATE_DIR: stateDir,
+      OPENCLAW_CONFIG_FILE: configPath,
+      OPENAI_API_KEY: "test-openai-key",
+      OPENCLAW_MODEL_PRIMARY: "openai-codex/gpt-5.4",
+      OPENCLAW_THINKING_DEFAULT: "xhigh",
+      OPENCLAW_SUBAGENT_MODEL_PRIMARY: "anthropic/claude-sonnet-4-5",
+      OPENCLAW_SUBAGENT_THINKING_DEFAULT: "high",
+    });
+
+    const cfg = readConfig(configPath);
+    expect(cfg.agents?.defaults?.model?.primary).toBe("openai-codex/gpt-5.4");
+    expect(cfg.agents?.defaults?.thinkingDefault).toBe("xhigh");
+    expect(cfg.agents?.defaults?.subagents?.model?.primary).toBe("anthropic/claude-sonnet-4-5");
+    expect(cfg.agents?.defaults?.subagents?.thinking).toBe("high");
   });
 
   it("sets gateway.controlUi.allowedOrigins from deployment env", () => {

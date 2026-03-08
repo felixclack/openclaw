@@ -207,6 +207,33 @@ try {
     console.log(`[sync-config] Set agents.defaults.thinkingDefault=${thinkingDefault}`);
   }
 
+  // Keep spawned coding subagents aligned with the deployed primary model by
+  // default, unless the operator explicitly set a separate subagent config.
+  const subagents = ensureObject(defaults, "subagents");
+  const currentPrimaryModel = trim(ensureObject(defaults, "model").primary);
+  const desiredSubagentPrimaryModel =
+    trim(process.env.OPENCLAW_SUBAGENT_MODEL_PRIMARY) ||
+    trim(subagents.model?.primary) ||
+    currentPrimaryModel;
+  if (desiredSubagentPrimaryModel) {
+    const subagentModel = ensureObject(subagents, "model");
+    if (subagentModel.primary !== desiredSubagentPrimaryModel) {
+      subagentModel.primary = desiredSubagentPrimaryModel;
+      console.log(
+        `[sync-config] Set agents.defaults.subagents.model.primary=${desiredSubagentPrimaryModel}`,
+      );
+    }
+  }
+
+  const desiredSubagentThinking =
+    trim(process.env.OPENCLAW_SUBAGENT_THINKING_DEFAULT) ||
+    trim(subagents.thinking) ||
+    trim(defaults.thinkingDefault);
+  if (desiredSubagentThinking && subagents.thinking !== desiredSubagentThinking) {
+    subagents.thinking = desiredSubagentThinking;
+    console.log(`[sync-config] Set agents.defaults.subagents.thinking=${desiredSubagentThinking}`);
+  }
+
   const maxConcurrent = trim(process.env.OPENCLAW_MAX_CONCURRENT);
   if (maxConcurrent && defaults.maxConcurrent !== Number(maxConcurrent)) {
     defaults.maxConcurrent = Number(maxConcurrent);
