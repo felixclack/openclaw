@@ -979,6 +979,11 @@ export async function startGatewayServer(
             browserControl = nextState.browserControl;
             channelHealthMonitor = nextState.channelHealthMonitor;
           },
+          updateFallbackContext: (nextState) => {
+            gatewayRequestContext.cron = nextState.cronState.cron;
+            gatewayRequestContext.cronStorePath = nextState.cronState.storePath;
+            setFallbackGatewayContext(gatewayRequestContext);
+          },
           startChannel,
           stopChannel,
           logHooks,

@@ -39,6 +39,7 @@ export function createGatewayReloadHandlers(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
+  updateFallbackContext?: (state: GatewayHotReloadState) => void;
   startChannel: (name: ChannelKind) => Promise<void>;
   stopChannel: (name: ChannelKind) => Promise<void>;
   logHooks: {
@@ -159,6 +160,7 @@ export function createGatewayReloadHandlers(params: {
     }
 
     params.setState(nextState);
+    params.updateFallbackContext?.(nextState);
   };
 
   let restartPending = false;
