@@ -276,7 +276,10 @@ export async function resolveMedia(
     return null;
   }
   if (!file.file_path) {
-    throw new Error("Telegram getFile returned no file_path");
+    // Telegram API sometimes returns a file object without file_path
+    // (e.g., for files that haven't finished processing server-side).
+    // Treat this as a missing file rather than crashing the agent.
+    return null;
   }
   const saved = await downloadAndSaveTelegramFile({
     filePath: file.file_path,

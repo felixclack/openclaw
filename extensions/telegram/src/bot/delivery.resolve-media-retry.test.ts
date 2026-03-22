@@ -245,11 +245,10 @@ describe("resolveMedia getFile retry", () => {
     },
   );
 
-  it("throws when getFile returns no file_path", async () => {
+  it("returns null when getFile returns no file_path (graceful degradation)", async () => {
     const getFile = vi.fn().mockResolvedValue({});
-    await expect(
-      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
-    ).rejects.toThrow("Telegram getFile returned no file_path");
+    const result = await resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    expect(result).toBeNull();
     expect(getFile).toHaveBeenCalledTimes(1);
   });
 
