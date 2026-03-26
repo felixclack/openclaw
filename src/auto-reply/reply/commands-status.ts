@@ -94,7 +94,9 @@ export async function buildStatusReply(params: {
         agentDir: statusAgentDir,
       });
       const usageEntry = usageSummary.providers[0];
-      if (usageEntry && !usageEntry.error && usageEntry.windows.length > 0) {
+      if (usageEntry && usageEntry.error) {
+        usageLine = `📊 Usage: (unavailable: ${usageEntry.error})`;
+      } else if (usageEntry && usageEntry.windows.length > 0) {
         const summaryLine = formatUsageWindowSummary(usageEntry, {
           now: Date.now(),
           maxWindows: 2,
@@ -104,8 +106,9 @@ export async function buildStatusReply(params: {
           usageLine = `📊 Usage: ${summaryLine}`;
         }
       }
-    } catch {
-      usageLine = null;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "unknown error";
+      usageLine = `📊 Usage: (error: ${errorMessage})`;
     }
   }
   const queueSettings = resolveQueueSettings({
