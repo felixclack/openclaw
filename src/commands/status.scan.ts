@@ -24,6 +24,7 @@ import { getUpdateCheckResult } from "./status.update.js";
 
 type MemoryStatusSnapshot = MemoryProviderStatus & {
   agentId: string;
+  probeError?: string;
 };
 
 type MemoryPluginStatus = {
@@ -171,12 +172,15 @@ async function resolveMemoryStatusSnapshot(params: {
   if (!manager) {
     return null;
   }
+  let probeError: string | undefined;
   try {
     await manager.probeVectorAvailability();
-  } catch {}
+  } catch (error) {
+    probeError = error instanceof Error ? error.message : String(error);
+  }
   const status = manager.status();
   await manager.close?.().catch(() => {});
-  return { agentId, ...status };
+  return { agentId, ...status, ...(probeError ? { probeError } : {}) };
 }
 
 async function scanStatusJsonFast(opts: {

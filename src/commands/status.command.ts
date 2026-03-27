@@ -398,6 +398,9 @@ export async function statusCommand(
       const summary = resolveMemoryCacheSummary(cache);
       parts.push(colorByTone(summary.tone, summary.text));
     }
+    if (memory.probeError) {
+      parts.push(warn(`probe error: ${memory.probeError}`));
+    }
     return parts.join(" · ");
   })();
 
