@@ -235,7 +235,8 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
 # Build with: docker build --build-arg OPENCLAW_INSTALL_TAILSCALE=1 ...
 ARG OPENCLAW_INSTALL_TAILSCALE=""
 RUN if [ -n "$OPENCLAW_INSTALL_TAILSCALE" ]; then \
-      curl -fsSL https://tailscale.com/install.sh | sh; \
+      curl -fsSL https://tailscale.com/install.sh | sh && \
+      mkdir -p /var/run/tailscale && chmod 777 /var/run/tailscale; \
     fi
 
 # Expose the CLI binary without requiring npm global writes as non-root.

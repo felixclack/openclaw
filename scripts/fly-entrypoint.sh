@@ -37,24 +37,22 @@ if [ "${RESET_CONFIG}" = "true" ] || [ "${RESET_CONFIG}" = "1" ]; then
     echo "[entrypoint] Config reset"
 fi
 
-# --- Tailscale ---
+# --- Tailscale (entirely non-fatal) ---
 if [ -n "$TAILSCALE_AUTHKEY" ] && command -v tailscaled >/dev/null 2>&1; then
-    mkdir -p /data/tailscale /var/run/tailscale
-    tailscaled \
-        --state=/data/tailscale/tailscaled.state \
-        --socket=/var/run/tailscale/tailscaled.sock \
-        --tun=userspace-networking \
-        --socks5-server=localhost:1055 \
-        --outbound-http-proxy-listen=localhost:1056 &
-    sleep 3
-    tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="clawdbot-fly" --accept-routes || \
-        echo "[entrypoint] Warning: tailscale up failed (non-fatal)"
-
-    TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
-    echo "[entrypoint] Tailscale: ${TAILSCALE_IP:-pending}"
-
-    tailscale serve --bg --https 443 http://localhost:3000 2>/dev/null || \
-        echo "[entrypoint] Warning: tailscale serve failed (non-fatal)"
+    (
+        mkdir -p /data/tailscale
+        tailscaled \
+            --state=/data/tailscale/tailscaled.state \
+            --socket=/var/run/tailscale/tailscaled.sock \
+            --tun=userspace-networking \
+            --socks5-server=localhost:1055 \
+            --outbound-http-proxy-listen=localhost:1056 &
+        sleep 3
+        tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="clawdbot-fly" --accept-routes
+        TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
+        echo "[entrypoint] Tailscale: ${TAILSCALE_IP:-pending}"
+        tailscale serve --bg --https 443 http://localhost:3000 2>/dev/null || true
+    ) || echo "[entrypoint] Warning: Tailscale setup failed (non-fatal)"
 fi
 
 echo "[entrypoint] Ready"
