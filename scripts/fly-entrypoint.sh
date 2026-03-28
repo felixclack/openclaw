@@ -40,14 +40,9 @@ fi
 # --- Tailscale (entirely non-fatal) ---
 if [ -n "$TAILSCALE_AUTHKEY" ] && command -v tailscaled >/dev/null 2>&1; then
     (
-        mkdir -p /data/tailscale
-        tailscaled \
-            --state=/data/tailscale/tailscaled.state \
-            --socket=/var/run/tailscale/tailscaled.sock \
-            --tun=userspace-networking \
-            --socks5-server=localhost:1055 \
-            --outbound-http-proxy-listen=localhost:1056 &
-        sleep 3
+        mkdir -p /data/tailscale /var/run/tailscale
+        tailscaled --state=/data/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
+        sleep 2
         tailscale up --authkey="$TAILSCALE_AUTHKEY" --hostname="clawdbot-fly" --accept-routes
         TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
         echo "[entrypoint] Tailscale: ${TAILSCALE_IP:-pending}"

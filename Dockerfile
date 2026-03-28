@@ -249,12 +249,9 @@ RUN chmod +x /app/scripts/fly-entrypoint.sh
 
 ENV NODE_ENV=production
 
-# Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
-# NOTE: Fly.io deployments with Tailscale override this via the process command
-# (entrypoint runs as root for tailscaled, then execs the gateway).
-USER node
+# NOTE: USER node removed for Fly/Tailscale builds (Tailscale needs root
+# for state/cache access). Fly provides firecracker VM isolation.
+# For non-Fly Docker deployments, add "USER node" to your own Dockerfile.
 
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
