@@ -1,5 +1,5 @@
-# OpenClaw Fly.io deployment configuration
-# See https://fly.io/docs/reference/configuration/
+# OpenClaw Fly.io deployment — private (Tailscale-only access)
+# Based on upstream fly.private.toml template
 
 app = "clawdbot-felix"
 primary_region = "lhr"
@@ -7,23 +7,24 @@ primary_region = "lhr"
 [build]
 dockerfile = "Dockerfile"
 
+[build.args]
+OPENCLAW_INSTALL_TAILSCALE = "1"
+
 [env]
 NODE_ENV = "production"
-# Fly uses x86, but keep this for consistency
 OPENCLAW_PREFER_PNPM = "1"
 OPENCLAW_STATE_DIR = "/data"
-NODE_OPTIONS = "--max-old-space-size=2880"
+NODE_OPTIONS = "--max-old-space-size=2048"
 
 [processes]
-app = "node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
+app = "/app/scripts/fly-entrypoint.sh node dist/index.js gateway --allow-unconfigured --port 3000 --bind lan"
 
-# No [http_service] — gateway is only accessible via Tailscale VPN.
-# Telegram uses outbound long polling and does not need inbound HTTP.
-# Health checks are available at http://clawdbot-fly:3000/health via Tailscale.
+# No [http_service] — gateway only accessible via Tailscale VPN.
+# Telegram uses outbound long polling; no inbound HTTP needed.
 
 [[vm]]
 size = "shared-cpu-2x"
-memory = "4096mb"
+memory = "2048mb"
 
 [mounts]
 source = "clawdbot_data"

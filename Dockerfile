@@ -37,7 +37,7 @@ RUN mkdir -p /out && \
       fi; \
     done
 
-# Stage 2: Build
+# ── Stage 2: Build ──────────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build
 
 # Install Bun (required for build scripts). Retry the whole bootstrap flow to
@@ -90,8 +90,7 @@ RUN pnpm canvas:a2ui:bundle || \
      echo "stub" > src/canvas-host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
 RUN pnpm build:docker
-
-# Force pnpm for UI build (Bun may fail on ARM/Synology architectures).
+# Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
 
@@ -101,7 +100,7 @@ FROM build AS runtime-assets
 RUN CI=true pnpm prune --prod && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete
 
-# Runtime base images
+# ── Runtime base images ─────────────────────────────────────────
 FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS base-default
 ARG OPENCLAW_NODE_BOOKWORM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm" \
@@ -112,7 +111,7 @@ ARG OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST
 LABEL org.opencontainers.image.base.name="docker.io/library/node:24-bookworm-slim" \
   org.opencontainers.image.base.digest="${OPENCLAW_NODE_BOOKWORM_SLIM_DIGEST}"
 
-# Stage 3: Runtime
+# ── Stage 3: Runtime ────────────────────────────────────────────
 FROM base-${OPENCLAW_VARIANT}
 ARG OPENCLAW_VARIANT
 ARG OPENCLAW_DOCKER_APT_UPGRADE
@@ -127,47 +126,6 @@ LABEL org.opencontainers.image.source="https://github.com/openclaw/openclaw" \
   org.opencontainers.image.licenses="MIT" \
   org.opencontainers.image.title="OpenClaw" \
   org.opencontainers.image.description="OpenClaw gateway and CLI runtime container image"
-
-# Keep the Fly deployment runtime provisioned with the operator toolchain
-# used by the live workspace and entrypoint bootstrapping.
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
-
-RUN corepack enable
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    autoconf bison build-essential libssl-dev libyaml-dev libreadline-dev \
-    zlib1g-dev libncurses5-dev libffi-dev libgdbm-dev libgdbm-compat-dev \
-    rustc gawk && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg && \
-    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-    postgresql-16 postgresql-16-pgvector postgresql-client-16 && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-ENV PGDATA=/data/postgres
-ENV PATH="/usr/lib/postgresql/16/bin:${PATH}"
-
-RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
-    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends gh && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
-
-RUN npm install -g @openai/codex
-RUN curl -fsSL https://tailscale.com/install.sh | sh
-
-ENV RUBY_VERSION=3.3.8
-RUN git clone https://github.com/rbenv/ruby-build.git /tmp/ruby-build && \
-    /tmp/ruby-build/bin/ruby-build "$RUBY_VERSION" /usr/local && \
-    rm -rf /tmp/ruby-build
-RUN gem install bundler
 
 WORKDIR /app
 
@@ -184,20 +142,23 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
       procps hostname curl git lsof openssl
 
-COPY --from=runtime-assets /app/dist ./dist
-COPY --from=runtime-assets /app/node_modules ./node_modules
-COPY --from=runtime-assets /app/package.json .
-COPY --from=runtime-assets /app/openclaw.mjs .
-COPY --from=runtime-assets /app/extensions ./extensions
-COPY --from=runtime-assets /app/skills ./skills
-COPY --from=runtime-assets /app/docs ./docs
-COPY --from=runtime-assets /app/scripts ./scripts
+RUN chown node:node /app
+
+COPY --from=runtime-assets --chown=node:node /app/dist ./dist
+COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules
+COPY --from=runtime-assets --chown=node:node /app/package.json .
+COPY --from=runtime-assets --chown=node:node /app/openclaw.mjs .
+COPY --from=runtime-assets --chown=node:node /app/extensions ./extensions
+COPY --from=runtime-assets --chown=node:node /app/skills ./skills
+COPY --from=runtime-assets --chown=node:node /app/docs ./docs
 
 # In npm-installed Docker images, prefer the copied source extension tree for
 # bundled discovery so package metadata that points at source entries stays valid.
 ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/extensions
 
 # Keep pnpm available in the runtime image for container-local workflows.
+# Use a shared Corepack home so the non-root `node` user does not need a
+# first-run network fetch when invoking pnpm.
 ENV COREPACK_HOME=/usr/local/share/corepack
 RUN install -d -m 0755 "$COREPACK_HOME" && \
     corepack enable && \
@@ -213,6 +174,7 @@ RUN install -d -m 0755 "$COREPACK_HOME" && \
     chmod -R a+rX "$COREPACK_HOME"
 
 # Install additional system packages needed by your skills or extensions.
+# Example: docker build --build-arg OPENCLAW_DOCKER_APT_PACKAGES="python3 wget" .
 ARG OPENCLAW_DOCKER_APT_PACKAGES=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
@@ -222,6 +184,9 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     fi
 
 # Optionally install Chromium and Xvfb for browser automation.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_BROWSER=1 ...
+# Adds ~300MB but eliminates the 60-90s Playwright install on every container start.
+# Must run after node_modules COPY so playwright-core is available.
 ARG OPENCLAW_INSTALL_BROWSER=""
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
@@ -230,10 +195,14 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends xvfb && \
       mkdir -p /home/node/.cache/ms-playwright && \
       PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright \
-      node /app/node_modules/playwright-core/cli.js install --with-deps chromium; \
+      node /app/node_modules/playwright-core/cli.js install --with-deps chromium && \
+      chown -R node:node /home/node/.cache/ms-playwright; \
     fi
 
 # Optionally install Docker CLI for sandbox container management.
+# Build with: docker build --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1 ...
+# Adds ~50MB. Only the CLI is installed — no Docker daemon.
+# Required for agents.defaults.sandbox to function in Docker deployments.
 ARG OPENCLAW_INSTALL_DOCKER_CLI=""
 ARG OPENCLAW_DOCKER_GPG_FINGERPRINT="9DC858229FC7DD38854AE2D88D81803C0EBFCD88"
 RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,sharing=locked \
@@ -243,9 +212,11 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
       DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates curl gnupg && \
       install -m 0755 -d /etc/apt/keyrings && \
+      # Verify Docker apt signing key fingerprint before trusting it as a root key.
+      # Update OPENCLAW_DOCKER_GPG_FINGERPRINT when Docker rotates release keys.
       curl -fsSL https://download.docker.com/linux/debian/gpg -o /tmp/docker.gpg.asc && \
       expected_fingerprint="$(printf '%s' "$OPENCLAW_DOCKER_GPG_FINGERPRINT" | tr '[:lower:]' '[:upper:]' | tr -d '[:space:]')" && \
-      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == \"fpr\" { print toupper($10); exit }')" && \
+      actual_fingerprint="$(gpg --batch --show-keys --with-colons /tmp/docker.gpg.asc | awk -F: '$1 == "fpr" { print toupper($10); exit }')" && \
       if [ -z "$actual_fingerprint" ] || [ "$actual_fingerprint" != "$expected_fingerprint" ]; then \
         echo "ERROR: Docker apt key fingerprint mismatch (expected $expected_fingerprint, got ${actual_fingerprint:-<empty>})" >&2; \
         exit 1; \
@@ -260,14 +231,30 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
         docker-ce-cli docker-compose-plugin; \
     fi
 
-RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw && \
-    chmod 755 /app/openclaw.mjs && \
-    chmod +x /app/scripts/fly-entrypoint.sh
+# Optionally install Tailscale for VPN-only access (no public IP).
+# Build with: docker build --build-arg OPENCLAW_INSTALL_TAILSCALE=1 ...
+ARG OPENCLAW_INSTALL_TAILSCALE=""
+RUN if [ -n "$OPENCLAW_INSTALL_TAILSCALE" ]; then \
+      curl -fsSL https://tailscale.com/install.sh | sh; \
+    fi
+
+# Expose the CLI binary without requiring npm global writes as non-root.
+RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
+ && chmod 755 /app/openclaw.mjs
+
+# Copy Fly entrypoint for persistent state and Tailscale bootstrap.
+COPY scripts/fly-entrypoint.sh /app/scripts/fly-entrypoint.sh
+RUN chmod +x /app/scripts/fly-entrypoint.sh
 
 ENV NODE_ENV=production
 
+# Security hardening: Run as non-root user
+# The node:24-bookworm image includes a 'node' user (uid 1000)
+# This reduces the attack surface by preventing container escape via root privileges
+# NOTE: Fly.io deployments with Tailscale override this via the process command
+# (entrypoint runs as root for tailscaled, then execs the gateway).
+USER node
+
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-
-ENTRYPOINT ["/app/scripts/fly-entrypoint.sh"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]
