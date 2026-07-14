@@ -1,0 +1,46 @@
+# Felix's OpenClaw Fly.io deployment configuration.
+# Deploy from the repository root with:
+#   fly deploy -c deploy/fly.felix.toml
+
+app = "clawdbot-felix"
+primary_region = "lhr"
+
+[build]
+dockerfile = "../Dockerfile.fly"
+
+[build.args]
+OPENCLAW_RUNTIME_USER = "root"
+
+[env]
+NODE_ENV = "production"
+OPENCLAW_PREFER_PNPM = "1"
+OPENCLAW_STATE_DIR = "/data"
+GBRAIN_HOME = "/data/gbrain"
+NODE_OPTIONS = "--max-old-space-size=3072"
+PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/data/bin"
+
+[processes]
+app = "openclaw-fly-start"
+
+[http_service]
+internal_port = 3000
+force_https = true
+auto_stop_machines = false
+auto_start_machines = true
+min_machines_running = 1
+processes = ["app"]
+
+[[http_service.checks]]
+grace_period = "60s"
+interval = "30s"
+method = "GET"
+timeout = "5s"
+path = "/readyz"
+
+[[vm]]
+size = "performance-2x"
+memory = "16384mb"
+
+[mounts]
+source = "clawdbot_data"
+destination = "/data"
