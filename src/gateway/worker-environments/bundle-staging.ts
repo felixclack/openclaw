@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants as fsConstants } from "node:fs";
+import { constants as fsConstants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { collectPackageDistInventory } from "../../infra/package-dist-inventory.js";
@@ -9,6 +9,7 @@ import { collectPackageDistInventory } from "../../infra/package-dist-inventory.
 // workspace packages; bootstrap installs production dependencies on the box with
 // scripts disabled, mirroring the npm channel.
 const WORKER_PACKAGE_LIFECYCLE_FIELDS = ["devDependencies", "scripts", "pnpm"] as const;
+const CONTROL_UI_DIST_PREFIX = "dist/control-ui/";
 
 export type WorkerBundleManifestEntry = {
   path: string;
@@ -16,6 +17,58 @@ export type WorkerBundleManifestEntry = {
   size: number;
   sha256: string;
 };
+
+export type WorkerBundleSourceIdentityEntry = {
+  path: string;
+  realPath: string;
+  kind: "directory" | "file";
+  dev: bigint;
+  ino: bigint;
+  mode: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+};
+
+type WorkerBundleSourceIdentityMap = Map<string, WorkerBundleSourceIdentityEntry>;
+
+function recordSourceIdentity(
+  identities: WorkerBundleSourceIdentityMap | undefined,
+  entry: WorkerBundleSourceIdentityEntry,
+): void {
+  identities?.set(`${entry.kind}\0${entry.path}`, entry);
+}
+
+async function recordSourceDirectoryIdentity(
+  identities: WorkerBundleSourceIdentityMap | undefined,
+  directoryPath: string,
+): Promise<void> {
+  if (!identities) {
+    return;
+  }
+  const realPath = await fs.realpath(directoryPath);
+  const stats = await fs.lstat(realPath, { bigint: true });
+  if (!stats.isDirectory() || stats.isSymbolicLink()) {
+    throw new Error(`Unsafe worker bundle directory: ${directoryPath}`);
+  }
+  recordSourceIdentity(identities, {
+    path: realPath,
+    realPath,
+    kind: "directory",
+    ...sourceIdentityStats(stats),
+  });
+}
+
+function sourceIdentityStats(stats: BigIntStats) {
+  return {
+    dev: stats.dev,
+    ino: stats.ino,
+    mode: stats.mode,
+    size: stats.size,
+    mtimeNs: stats.mtimeNs,
+    ctimeNs: stats.ctimeNs,
+  };
+}
 
 export function comparePaths(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
@@ -48,7 +101,7 @@ function serializePackageManifest(parsed: Record<string, unknown>): Buffer {
 // at their vendored copies so `npm install` on the box resolves them without a registry.
 function pruneWorkerPackageManifest(
   contents: Buffer,
-  vendoredDirsByName: ReadonlyMap<string, string>,
+  vendoredDirsByName: ReadonlyMap<string, string> = new Map(),
 ): Buffer {
   const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
   const dependencies = readManifestDependencies(parsed);
@@ -74,14 +127,6 @@ function pruneWorkerPackageManifest(
   return serializePackageManifest(pruned);
 }
 
-// Vendored workspace manifests keep their registry dependencies but never ship
-// lifecycle scripts or dev-only fields.
-function pruneVendoredPackageManifest(contents: Buffer): Buffer {
-  const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
-  const { pruned, prunedFieldCount } = withoutLifecycleFields(parsed);
-  return prunedFieldCount === 0 ? contents : serializePackageManifest(pruned);
-}
-
 function normalizePortableMode(mode: number, relativePath: string): number {
   return relativePath === "openclaw.mjs" || (mode & 0o111) !== 0 ? 0o700 : 0o600;
 }
@@ -96,6 +141,7 @@ type StagedFileSource = {
 async function stageFileEntry(
   stagingRoot: string,
   source: StagedFileSource,
+  sourceIdentities?: WorkerBundleSourceIdentityMap,
 ): Promise<{ entry: WorkerBundleManifestEntry; contents: Buffer }> {
   const { sourcePath, expectedRealPath, stagedPath } = source;
   const sourceRealPath = await fs.realpath(sourcePath);
@@ -110,8 +156,8 @@ async function stageFileEntry(
   let contents: Buffer;
   let mode: number;
   try {
-    const openedStats = await handle.stat();
-    const currentStats = await fs.lstat(sourcePath);
+    const openedStats = await handle.stat({ bigint: true });
+    const currentStats = await fs.lstat(sourcePath, { bigint: true });
     const currentRealPath = await fs.realpath(sourcePath);
     if (
       !openedStats.isFile() ||
@@ -127,7 +173,13 @@ async function stageFileEntry(
     if (source.transform) {
       contents = source.transform(contents);
     }
-    mode = normalizePortableMode(openedStats.mode, stagedPath);
+    mode = normalizePortableMode(Number(openedStats.mode), stagedPath);
+    recordSourceIdentity(sourceIdentities, {
+      path: expectedRealPath,
+      realPath: currentRealPath,
+      kind: "file",
+      ...sourceIdentityStats(openedStats),
+    });
   } finally {
     await handle.close();
   }
@@ -152,13 +204,18 @@ async function stageManifestEntry(
   stagingRoot: string,
   relativePath: string,
   transform?: (contents: Buffer) => Buffer,
+  sourceIdentities?: WorkerBundleSourceIdentityMap,
 ): Promise<{ entry: WorkerBundleManifestEntry; contents: Buffer }> {
-  return await stageFileEntry(stagingRoot, {
-    sourcePath: path.join(sourceRoot, relativePath),
-    expectedRealPath: path.resolve(sourceRootRealPath, ...relativePath.split("/")),
-    stagedPath: relativePath,
-    transform,
-  });
+  return await stageFileEntry(
+    stagingRoot,
+    {
+      sourcePath: path.join(sourceRoot, relativePath),
+      expectedRealPath: path.resolve(sourceRootRealPath, ...relativePath.split("/")),
+      stagedPath: relativePath,
+      transform,
+    },
+    sourceIdentities,
+  );
 }
 
 // tsdown keeps some @openclaw workspace packages external of dist (never-bundle list),
@@ -183,6 +240,22 @@ function collectOpenclawImportSpecifiers(
   }
 }
 
+function pruneVendoredPackageManifest(
+  packageName: string,
+  referencedPackages: ReadonlySet<string>,
+  contents: Buffer,
+): Buffer {
+  const parsed = JSON.parse(contents.toString("utf8")) as Record<string, unknown>;
+  for (const [dependencyName, spec] of Object.entries(readManifestDependencies(parsed))) {
+    if (spec.startsWith("workspace:") && referencedPackages.has(dependencyName)) {
+      throw new Error(
+        `Vendored workspace dependency ${dependencyName} remains referenced by ${packageName} dist; bundle it into the package build or add explicit worker bundle support`,
+      );
+    }
+  }
+  return pruneWorkerPackageManifest(contents);
+}
+
 async function readWorkspaceDependencyNames(sourceRoot: string): Promise<Set<string>> {
   const raw = await fs.readFile(path.join(sourceRoot, "package.json"), "utf8");
   const dependencies = readManifestDependencies(JSON.parse(raw) as Record<string, unknown>);
@@ -195,16 +268,13 @@ async function readWorkspaceDependencyNames(sourceRoot: string): Promise<Set<str
 async function collectVendoredPackageFiles(
   packageName: string,
   vendorRealRoot: string,
+  sourceIdentities?: WorkerBundleSourceIdentityMap,
 ): Promise<string[]> {
   const files = ["package.json"];
-  const shrinkwrapStats = await fs
-    .lstat(path.join(vendorRealRoot, "npm-shrinkwrap.json"))
-    .catch(() => undefined);
-  if (shrinkwrapStats?.isFile()) {
-    files.push("npm-shrinkwrap.json");
-  }
   const walk = async (relativeDir: string): Promise<void> => {
-    const dirents = await fs.readdir(path.join(vendorRealRoot, ...relativeDir.split("/")), {
+    const directoryPath = path.join(vendorRealRoot, ...relativeDir.split("/"));
+    await recordSourceDirectoryIdentity(sourceIdentities, directoryPath);
+    const dirents = await fs.readdir(directoryPath, {
       withFileTypes: true,
     });
     for (const dirent of dirents) {
@@ -236,6 +306,7 @@ async function stageVendoredWorkspacePackages(params: {
   sourceRoot: string;
   stagingRoot: string;
   packageNames: readonly string[];
+  sourceIdentities?: WorkerBundleSourceIdentityMap;
 }): Promise<{ entries: WorkerBundleManifestEntry[]; vendoredDirsByName: Map<string, string> }> {
   const entries: WorkerBundleManifestEntry[] = [];
   const vendoredDirsByName = new Map<string, string>();
@@ -253,26 +324,56 @@ async function stageVendoredWorkspacePackages(params: {
       );
     }
     const vendorDir = `vendor/${packageName.replace(/^@/u, "").replaceAll("/", "-")}`;
-    for (const relativePath of await collectVendoredPackageFiles(packageName, vendorRealRoot)) {
-      const { entry } = await stageFileEntry(params.stagingRoot, {
-        sourcePath: path.join(vendorRealRoot, ...relativePath.split("/")),
-        expectedRealPath: path.resolve(vendorRealRoot, ...relativePath.split("/")),
-        stagedPath: `${vendorDir}/${relativePath}`,
-        transform: relativePath === "package.json" ? pruneVendoredPackageManifest : undefined,
-      });
+    const files = await collectVendoredPackageFiles(
+      packageName,
+      vendorRealRoot,
+      params.sourceIdentities,
+    );
+    const referencedPackages = new Set<string>();
+    for (const relativePath of files.filter((candidate) => candidate !== "package.json")) {
+      const { entry, contents } = await stageFileEntry(
+        params.stagingRoot,
+        {
+          sourcePath: path.join(vendorRealRoot, ...relativePath.split("/")),
+          expectedRealPath: path.resolve(vendorRealRoot, ...relativePath.split("/")),
+          stagedPath: `${vendorDir}/${relativePath}`,
+        },
+        params.sourceIdentities,
+      );
+      collectOpenclawImportSpecifiers(relativePath, contents, referencedPackages);
       entries.push(entry);
     }
+    const { entry: packageManifestEntry } = await stageFileEntry(
+      params.stagingRoot,
+      {
+        sourcePath: path.join(vendorRealRoot, "package.json"),
+        expectedRealPath: path.resolve(vendorRealRoot, "package.json"),
+        stagedPath: `${vendorDir}/package.json`,
+        transform: (contents) =>
+          pruneVendoredPackageManifest(packageName, referencedPackages, contents),
+      },
+      params.sourceIdentities,
+    );
+    entries.push(packageManifestEntry);
     vendoredDirsByName.set(packageName, vendorDir);
   }
   return { entries, vendoredDirsByName };
 }
 
-export async function collectWorkerBundleManifest(
+async function collectWorkerBundleManifestInternal(
   sourceRoot: string,
   stagingRoot: string,
+  sourceIdentities?: WorkerBundleSourceIdentityMap,
 ): Promise<WorkerBundleManifestEntry[]> {
   const sourceRootRealPath = await fs.realpath(sourceRoot);
-  const distFiles = await collectPackageDistInventory(sourceRoot);
+  // Control UI assets are built lazily after the Gateway starts and never execute on workers.
+  // Excluding them keeps worker identity stable across that startup race.
+  const distFiles = (
+    await collectPackageDistInventory(sourceRoot, {
+      onDirectory: async (directoryPath) =>
+        await recordSourceDirectoryIdentity(sourceIdentities, directoryPath),
+    })
+  ).filter((relativePath) => !relativePath.startsWith(CONTROL_UI_DIST_PREFIX));
   if (distFiles.length === 0) {
     throw new Error(
       `OpenClaw worker bundle has no packaged dist files; build the running package at ${sourceRoot}`,
@@ -286,6 +387,8 @@ export async function collectWorkerBundleManifest(
       sourceRootRealPath,
       stagingRoot,
       relativePath,
+      undefined,
+      sourceIdentities,
     );
     collectOpenclawImportSpecifiers(relativePath, contents, referencedPackages);
     entries.push(entry);
@@ -295,6 +398,7 @@ export async function collectWorkerBundleManifest(
     sourceRoot,
     stagingRoot,
     packageNames: [...workspaceDependencyNames].filter((name) => referencedPackages.has(name)),
+    sourceIdentities,
   });
   entries.push(...vendored.entries);
   // The shipped root manifest is derived after the dist scan so vendored workspace deps
@@ -305,7 +409,32 @@ export async function collectWorkerBundleManifest(
     stagingRoot,
     "package.json",
     (contents) => pruneWorkerPackageManifest(contents, vendored.vendoredDirsByName),
+    sourceIdentities,
   );
   entries.push(manifest.entry);
   return entries.toSorted((left, right) => comparePaths(left.path, right.path));
+}
+
+export async function collectWorkerBundleManifest(
+  sourceRoot: string,
+  stagingRoot: string,
+): Promise<WorkerBundleManifestEntry[]> {
+  return await collectWorkerBundleManifestInternal(sourceRoot, stagingRoot);
+}
+
+export async function collectWorkerBundleManifestWithSourceIdentity(
+  sourceRoot: string,
+  stagingRoot: string,
+): Promise<{
+  manifest: WorkerBundleManifestEntry[];
+  sourceIdentity: WorkerBundleSourceIdentityEntry[];
+}> {
+  const identities: WorkerBundleSourceIdentityMap = new Map();
+  const manifest = await collectWorkerBundleManifestInternal(sourceRoot, stagingRoot, identities);
+  return {
+    manifest,
+    sourceIdentity: [...identities.values()].toSorted((left, right) =>
+      comparePaths(`${left.kind}\0${left.path}`, `${right.kind}\0${right.path}`),
+    ),
+  };
 }

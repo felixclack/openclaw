@@ -1,6 +1,7 @@
 import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 
 type NativeLinkTarget = "inline" | "external";
 
@@ -23,6 +24,8 @@ type WebKitUpdateMessageHandler = {
 };
 
 export const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
+export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
+  "openclaw:native-update-availability-changed";
 
 type NativeLinkRouting = {
   dispose(): void;
@@ -38,12 +41,20 @@ function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined 
   return handler?.postMessage.bind(handler);
 }
 
-export function postNativeUpdate(): boolean {
-  const handler = (
+function getNativeUpdateHandler(): WebKitUpdateMessageHandler | undefined {
+  return (
     window as unknown as {
       webkit?: { messageHandlers?: { openclawUpdate?: WebKitUpdateMessageHandler } };
     }
   ).webkit?.messageHandlers?.openclawUpdate;
+}
+
+export function hasNativeUpdateBridge(): boolean {
+  return getNativeUpdateHandler() !== undefined;
+}
+
+export function postNativeUpdate(): boolean {
+  const handler = getNativeUpdateHandler();
   if (!handler) {
     return false;
   }
@@ -169,14 +180,7 @@ export function startNativeLinkRouting(): NativeLinkRouting {
   };
 
   const handleClick = (event: MouseEvent) => {
-    if (
-      event.defaultPrevented ||
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
-    ) {
+    if (!shouldHandleNavigationClick(event)) {
       return;
     }
     const appLink = trustedExternalAppUrl(event);
