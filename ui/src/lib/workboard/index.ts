@@ -2,6 +2,7 @@
 export {
   WORKBOARD_PRIORITIES,
   WORKBOARD_CHANGED_EVENT,
+  type WorkboardBoardSummary,
   type WorkboardCard,
   type WorkboardDependencyState,
   type WorkboardEvent,
@@ -22,13 +23,12 @@ export {
   workboardCardMatchesHealthKey,
 } from "./derived.ts";
 export { captureSessionToWorkboard } from "./session-capture.ts";
-export { getWorkboardDependencyState } from "./card-state.ts";
+export { getWorkboardDependencyState, resetDraftState } from "./card-state.ts";
 export { loadWorkboard, refreshWorkboard } from "./loading.ts";
 export {
   configureWorkboardLiveRefresh,
   handleWorkboardChanged,
   resumeWorkboardLiveRefresh,
-  stopWorkboardLiveRefresh,
 } from "./live-refresh.ts";
 export { findWorkboardSession, getWorkboardLifecycle } from "./lifecycle.ts";
 export { syncWorkboardLifecycle } from "./lifecycle-reconciliation.ts";
@@ -44,6 +44,7 @@ export { startWorkboardCard, stopWorkboardCard } from "./execution.ts";
 export {
   getWorkboardState,
   stopWorkboardLifecycleRefresh,
+  stopWorkboardLiveRefresh,
   workboardHasActiveWrites,
   workboardMutationsReady,
 } from "./runtime.ts";
